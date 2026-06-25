@@ -1,7 +1,11 @@
 [project]
 name = "neo4j-viz"
 version = "0.1.0"
-description = "Add your description here"
+description = "Neo4j graph visualization app with FastAPI and D3.js"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.116.0",
+    "neo4j>=5.28.0",
+    "uvicorn>=0.35.0",
+]
