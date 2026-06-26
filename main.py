@@ -2,15 +2,31 @@ from __future__ import annotations
 
 from functools import lru_cache
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
 from neo4j import GraphDatabase
 import uvicorn
 
 
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = BASE_DIR / "app" / "templates"
+
 app = FastAPI(title="Neo4j Viz")
+
+# Mount the templates directory to serve static JS files
+app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR)), name="static")
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Include routes from app module (neighbors, search, schema endpoints)
+from app.routes import router as app_router  # noqa: E402
+app.include_router(app_router)
 
 
 def _neo4j_settings() -> tuple[str, str, str, str | None]:
@@ -81,133 +97,8 @@ def fetch_graph(limit: int = 200) -> dict[str, list[dict[str, Any]]]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Neo4j Viz</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 0; }
-      .toolbar { padding: 0.75rem; border-bottom: 1px solid #ddd; display: flex; gap: 0.5rem; align-items: center; }
-      #graph { width: 100vw; height: calc(100vh - 58px); display: block; }
-      .link { stroke: #999; stroke-opacity: 0.65; }
-      .node { stroke: #fff; stroke-width: 1.5px; }
-      .label { font-size: 10px; pointer-events: none; }
-      #status { color: #555; }
-    </style>
-  </head>
-  <body>
-    <div class="toolbar">
-      <label for="limit">Node limit:</label>
-      <input id="limit" type="number" min="1" max="1000" value="200" />
-      <button id="reload">Reload</button>
-      <span id="status"></span>
-    </div>
-    <svg id="graph"></svg>
-
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script>
-      const svg = d3.select('#graph');
-      const width = window.innerWidth;
-      const height = window.innerHeight - 58;
-      svg.attr('viewBox', [0, 0, width, height]);
-
-      async function loadGraph() {
-        const status = document.getElementById('status');
-        status.textContent = 'Loading…';
-
-        const limit = Number(document.getElementById('limit').value || 200);
-        const response = await fetch(`/api/graph?limit=${encodeURIComponent(limit)}`);
-
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          status.textContent = payload.detail || 'Could not load graph data';
-          return;
-        }
-
-        const data = await response.json();
-        status.textContent = `Loaded ${data.nodes.length} nodes and ${data.links.length} relationships`;
-        renderGraph(data);
-      }
-
-      function renderGraph(data) {
-        svg.selectAll('*').remove();
-
-        const color = d3.scaleOrdinal(d3.schemeTableau10);
-
-        const link = svg.append('g')
-          .attr('stroke', '#999')
-          .attr('stroke-opacity', 0.6)
-          .selectAll('line')
-          .data(data.links)
-          .join('line')
-          .attr('class', 'link')
-          .attr('stroke-width', 1.5);
-
-        const node = svg.append('g')
-          .selectAll('circle')
-          .data(data.nodes)
-          .join('circle')
-          .attr('class', 'node')
-          .attr('r', 8)
-          .attr('fill', d => color(d.label));
-
-        node.append('title').text(d => `${d.label} (${d.id})`);
-
-        const labels = svg.append('g')
-          .selectAll('text')
-          .data(data.nodes)
-          .join('text')
-          .attr('class', 'label')
-          .text(d => d.label);
-
-        const simulation = d3.forceSimulation(data.nodes)
-          .force('link', d3.forceLink(data.links).id(d => d.id).distance(65))
-          .force('charge', d3.forceManyBody().strength(-230))
-          .force('center', d3.forceCenter(width / 2, height / 2));
-
-        node.call(d3.drag()
-          .on('start', (event) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            event.subject.fx = event.subject.x;
-            event.subject.fy = event.subject.y;
-          })
-          .on('drag', (event) => {
-            event.subject.fx = event.x;
-            event.subject.fy = event.y;
-          })
-          .on('end', (event) => {
-            if (!event.active) simulation.alphaTarget(0);
-            event.subject.fx = null;
-            event.subject.fy = null;
-          }));
-
-        simulation.on('tick', () => {
-          link
-            .attr('x1', d => d.source.x)
-            .attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x)
-            .attr('y2', d => d.target.y);
-
-          node
-            .attr('cx', d => d.x)
-            .attr('cy', d => d.y);
-
-          labels
-            .attr('x', d => d.x + 10)
-            .attr('y', d => d.y + 4);
-        });
-      }
-
-      document.getElementById('reload').addEventListener('click', loadGraph);
-      loadGraph();
-    </script>
-  </body>
-</html>
-"""
+def index(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/api/graph")
