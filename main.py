@@ -1,23 +1,32 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import os
+from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
 from neo4j import GraphDatabase
-import uvicorn
-
+from starlette.requests import Request
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 
-app = FastAPI(title="Neo4j Viz")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    if _driver.cache_info().currsize:
+        _driver().close()
+        _driver.cache_clear()
+
+
+app = FastAPI(title="Neo4j Viz", lifespan=lifespan)
 
 # Mount the templates directory to serve static JS files
 app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR)), name="static")
@@ -26,6 +35,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Include routes from app module (neighbors, search, schema endpoints)
 from app.routes import router as app_router  # noqa: E402
+
 app.include_router(app_router)
 
 
@@ -98,25 +108,22 @@ def fetch_graph(limit: int = 200) -> dict[str, list[dict[str, Any]]]:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/api/graph")
-def graph(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, list[dict[str, Any]]]:
+def graph(
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, list[dict[str, Any]]]:
     try:
         return fetch_graph(limit=limit)
-    except Exception as exc:  # pragma: no cover - defensive error handling for runtime failures
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - defensive error handling for runtime failures
         raise HTTPException(
             status_code=503,
             detail="Unable to read graph from Neo4j. Check connection settings and database availability.",
         ) from exc
-
-
-@app.on_event("shutdown")
-def close_driver() -> None:
-    if _driver.cache_info().currsize:
-        _driver().close()
-        _driver.cache_clear()
 
 
 def main() -> None:
